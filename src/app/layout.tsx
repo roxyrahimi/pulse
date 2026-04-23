@@ -32,7 +32,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <ClerkProvider>
+    <ClerkProvider publishableKey={process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || "pk_test_cGF0aWVudC1oYWdmaXNoLTY1LmNsZXJrLmFjY291bnRzLmRldiQ"}>
       <html lang="en" suppressHydrationWarning className={`${inter.className}`}>
         <body className="min-h-screen" suppressHydrationWarning>
           <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
