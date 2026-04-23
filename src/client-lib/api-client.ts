@@ -34,7 +34,15 @@ export async function createTask(input: TaskInput) {
 
 export async function updateTask(id: string, patch: Partial<Task>) {
   await apiClient.patch(`/tasks/${id}`, patch);
-  await mutate("/tasks");
+  await invalidateTaskLists();
+}
+
+export function useTaskFiles(taskId: string | null | undefined) {
+  return useSWR<import("@/shared/models/files").ProjectFile[], Error>(
+    taskId ? `/tasks/${taskId}/files` : null,
+    fetcher,
+    { refreshInterval: 60_000 },
+  );
 }
 
 export async function deleteTask(id: string) {

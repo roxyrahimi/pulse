@@ -55,9 +55,10 @@ function applyOptimisticStatus(
 interface Props {
   task: Task;
   now: Date;
+  onOpenDetail?: (taskId: string) => void;
 }
 
-export function TaskCard({ task, now }: Props) {
+export function TaskCard({ task, now, onOpenDetail }: Props) {
   const [expanded, setExpanded] = useState(false);
   const urgency = computeUrgency(task, now);
   const progress = task.estimatedMinutes > 0 ? Math.min(100, (task.completedMinutes / task.estimatedMinutes) * 100) : 0;
@@ -152,7 +153,20 @@ export function TaskCard({ task, now }: Props) {
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <h3 className={cn("font-semibold leading-tight", isDone && "line-through")}>{task.title}</h3>
+                {onOpenDetail ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenDetail(task.id)}
+                    className={cn(
+                      "block w-full truncate text-left font-semibold leading-tight hover:underline",
+                      isDone && "line-through",
+                    )}
+                  >
+                    {task.title}
+                  </button>
+                ) : (
+                  <h3 className={cn("font-semibold leading-tight", isDone && "line-through")}>{task.title}</h3>
+                )}
                 <div className="mt-1 flex flex-wrap items-center gap-1.5">
                   <Badge variant="outline" className="text-[10px]">{task.category}</Badge>
                   <Badge variant="outline" className="text-[10px]">{task.priority}</Badge>
