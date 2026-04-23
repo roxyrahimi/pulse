@@ -2,11 +2,8 @@ import { NextResponse } from "next/server";
 import { Pool } from "@neondatabase/serverless";
 import { requireUserId } from "@/server-lib/auth";
 import { queryInternalDatabase } from "@/server-lib/internal-db-query";
-import {
-  DEFAULT_CATEGORIES,
-  validateCategoryInput,
-  type EventCategory,
-} from "@/shared/models/calendar";
+import { seedDefaultCategoriesIfEmpty } from "@/server-lib/calendar-db";
+import { validateCategoryInput, type EventCategory } from "@/shared/models/calendar";
 
 export const runtime = "nodejs";
 
@@ -21,55 +18,26 @@ function rowToCategory(row: Record<string, unknown>): EventCategory {
   };
 }
 
-// Module-scoped pool for transactional seed-if-empty.
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
-/**
- * Race-safe auto-seed: if the user has zero categories, open a transaction,
- * take an advisory lock keyed by user_email, re-check inside the lock, and
- * insert the 4 defaults. Concurrent callers observe the inserts of whichever
- * request wins the lock and take the no-op path.
- */
-async function ensureDefaultCategories(userId: string): Promise<void> {
-  const existing = await queryInternalDatabase(
-    `SELECT 1 FROM vybe_event_categories WHERE user_email = $1 LIMIT 1`,
-    [userId],
-  );
-  if (existing.length > 0) return;
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    // Advisory lock scoped to this user, released at COMMIT/ROLLBACK.
-    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`vybe-cat-seed:${userId}`]);
-    const { rows: recheck } = await client.query(
-      `SELECT 1 FROM vybe_event_categories WHERE user_email = $1 LIMIT 1`,
-      [userId],
-    );
-    if (recheck.length === 0) {
-      for (const c of DEFAULT_CATEGORIES) {
-        await client.query(
-          `INSERT INTO vybe_event_categories (user_email, name, color, is_default)
-           VALUES ($1, $2, $3, TRUE)`,
-          [userId, c.name, c.color],
-        );
-      }
-    }
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
 
 export async function GET() {
   const gate = await requireUserId();
   if (gate instanceof NextResponse) return gate;
   const userId = gate;
 
-  await ensureDefaultCategories(userId);
+  await seedDefaultCategoriesIfEmpty(userId, {
+    query: (text, params) => queryInternalDatabase(text, (params ?? []) as never[]),
+    acquireClient: async () => {
+      const c = await pool.connect();
+      return {
+        query: async (text: string, params?: unknown[]) => {
+          const res = await c.query(text, params as unknown[]);
+          return { rows: res.rows as Array<Record<string, unknown>> };
+        },
+        release: () => c.release(),
+      };
+    },
+  });
 
   const rows = await queryInternalDatabase(
     `SELECT * FROM vybe_event_categories

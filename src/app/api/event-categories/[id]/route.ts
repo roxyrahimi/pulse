@@ -1,17 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireUserId } from "@/server-lib/auth";
 import { queryInternalDatabase } from "@/server-lib/internal-db-query";
+import { deleteCategoryWithReassign } from "@/server-lib/calendar-db";
 import { validateCategoryPatch } from "@/shared/models/calendar";
 
 export const runtime = "nodejs";
-
-async function loadOwned(id: string, userId: string) {
-  const rows = await queryInternalDatabase(
-    `SELECT * FROM vybe_event_categories WHERE id = $1 AND user_email = $2`,
-    [id, userId],
-  );
-  return rows[0] as Record<string, unknown> | undefined;
-}
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requireUserId();
@@ -19,8 +12,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const userId = gate;
 
   const { id } = await params;
-  const existing = await loadOwned(id, userId);
-  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const existing = await queryInternalDatabase(
+    `SELECT * FROM vybe_event_categories WHERE id = $1 AND user_email = $2`,
+    [id, userId],
+  );
+  if (existing.length === 0) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   let body: unknown;
   try {
@@ -60,56 +57,15 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
   const userId = gate;
 
   const { id } = await params;
-  const existing = await loadOwned(id, userId);
-  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-  if (existing.is_default === true) {
-    return NextResponse.json(
-      { error: "Default category cannot be deleted" },
-      { status: 400 },
-    );
-  }
-
   const url = new URL(req.url);
-  const reassignTo = url.searchParams.get("reassignTo");
+  const hasReassignParam = url.searchParams.has("reassignTo");
+  const reassignTo = hasReassignParam ? url.searchParams.get("reassignTo") : undefined;
 
-  // Count events using this category.
-  const countRows = await queryInternalDatabase(
-    `SELECT COUNT(*)::int AS n FROM vybe_events WHERE user_email = $1 AND category_id = $2`,
-    [userId, id],
-  );
-  const count = (countRows[0]?.n as number | undefined) ?? 0;
-
-  if (count > 0) {
-    if (!reassignTo) {
-      return NextResponse.json(
-        { error: `Category has ${count} event(s). Provide ?reassignTo=<categoryId> or an empty value to clear.` },
-        { status: 409 },
-      );
-    }
-    if (reassignTo === "") {
-      await queryInternalDatabase(
-        `UPDATE vybe_events SET category_id = NULL, updated_at = NOW()
-         WHERE user_email = $1 AND category_id = $2`,
-        [userId, id],
-      );
-    } else {
-      const target = await loadOwned(reassignTo, userId);
-      if (!target) return NextResponse.json({ error: "reassignTo category not found" }, { status: 400 });
-      if ((target.id as string) === id) {
-        return NextResponse.json({ error: "Cannot reassign to the category being deleted" }, { status: 400 });
-      }
-      await queryInternalDatabase(
-        `UPDATE vybe_events SET category_id = $3, updated_at = NOW()
-         WHERE user_email = $1 AND category_id = $2`,
-        [userId, id, reassignTo],
-      );
-    }
+  const result = await deleteCategoryWithReassign(userId, id, reassignTo, {
+    query: (text, params) => queryInternalDatabase(text, (params ?? []) as never[]),
+  });
+  if (!result.ok) {
+    return NextResponse.json({ error: result.error }, { status: result.status });
   }
-
-  await queryInternalDatabase(
-    `DELETE FROM vybe_event_categories WHERE id = $1 AND user_email = $2`,
-    [id, userId],
-  );
   return NextResponse.json({ ok: true });
 }
